@@ -1,0 +1,74 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      httpclient:
+        connect-timeout: 1000      # мс: сервис не принимает соединение → быстрая ошибка
+        response-timeout: 10s      # верхняя граница ожидания ответа внутреннего сервиса
+      routes:
+        # SSE статусов заказа: /api/orders/{id}/events → Delivery Service (без таймаута ответа — это поток)
+        - id: order-events
+          uri: http://delivery-service:8080
+          predicates:
+            - Path=/api/orders/{id}/events
+          filters:
+            - RewritePath=/api/orders/(?<id>\d+)/events, /api/deliveries/orders/$\{id}/events
+          metadata:
+            response-timeout: -1
+        - id: orders
+          uri: http://order-service:8080
+          predicates:
+            - Path=/api/orders/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orders
+                fallbackUri: forward:/fallback/order-service
+        - id: suppliers
+          uri: http://supplier-service:8080
+          predicates:
+            - Path=/api/suppliers/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: suppliers
+                fallbackUri: forward:/fallback/supplier-service
+        - id: deliveries
+          uri: http://delivery-service:8080
+          predicates:
+            - Path=/api/deliveries/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: deliveries
+                fallbackUri: forward:/fallback/delivery-service
+
+resilience4j:
+  timelimiter:
+    configs:
+      default:
+        timeout-duration: 10s      # создание заказа может включать retry к Supplier Service
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 6
+        minimum-number-of-calls: 4
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %-22.22logger{0} : %msg%n"

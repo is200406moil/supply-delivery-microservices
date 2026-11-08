@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Food Delivery · микросервисы — демо-клиент</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1420; --panel:#161d2c; --line:#26304a; --text:#dbe3f4; --muted:#8693ad;
+          --ok:#3fcf8e; --warn:#f5b84b; --err:#ff6b6b; --accent:#6aa8ff; --mono:"Cascadia Mono",Consolas,monospace; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 "Segoe UI",system-ui,sans-serif; }
+  header { padding:16px 26px 12px; border-bottom:1px solid var(--line) }
+  header h1 { margin:0 0 4px; font-size:20px; font-weight:600 }
+  .flow { font-family:var(--mono); font-size:13px; color:var(--muted) }
+  .flow b { color:var(--accent); font-weight:600 }
+  main { padding:16px 26px 24px; display:grid; gap:12px }
+  .title { font-size:16px; font-weight:600; margin:6px 0 0 }
+  .title small { color:var(--muted); font-weight:400; margin-left:8px }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden }
+  .req { display:flex; gap:12px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); font-family:var(--mono); font-size:14px; flex-wrap:wrap }
+  .m { font-weight:700; padding:1px 8px; border-radius:5px; background:#22314f; color:var(--accent) }
+  .m.POST { color:var(--ok); background:#173426 }
+  .st { font-weight:700 } .st.ok { color:var(--ok) } .st.c4 { color:var(--warn) } .st.c5 { color:var(--err) }
+  .meta { color:var(--muted); margin-left:auto; font-size:13px }
+  .rid { color:#ffb86b }
+  .type { color:#c49bff }
+  pre { margin:0; padding:9px 14px; font-family:var(--mono); font-size:13px; white-space:pre-wrap; word-break:break-word; color:#cfd8ea }
+  .k { color:#8fc1ff } .s { color:#b5e48c } .n { color:#ffb86b } .b { color:#ff92d0 }
+  .note { color:var(--muted); font-size:13px; padding:0 14px 9px }
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:13.5px }
+  th, td { text-align:left; padding:7px 14px; border-bottom:1px solid var(--line); white-space:nowrap }
+  td.wrap { white-space:normal; font-size:12.5px; color:#cfd8ea }
+  th { color:var(--muted); font-weight:500; font-size:12.5px }
+  .badge { padding:2px 9px; border-radius:20px; font-weight:700; font-size:12.5px }
+  .UP, .CLOSED, .DELIVERED { background:#173426; color:var(--ok) }
+  .DOWN, .OPEN { background:#3d1d22; color:var(--err) }
+  .HALF_OPEN, .IN_TRANSIT { background:#3a2e14; color:var(--warn) }
+  .DELIVERY_CREATED { background:#22314f; color:var(--accent) } .COURIER_ASSIGNED { background:#2f2850; color:#c49bff }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; padding:10px 14px }
+  .svc { border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-family:var(--mono); font-size:13px }
+  .svc .name { font-weight:700; margin-bottom:4px }
+  .svc .row { color:var(--muted) }
+</style>
+</head>
+<body>
+<header>
+  <h1>АС сервиса доставки · микросервисная система (практическая работа №8)</h1>
+  <div class="flow">Client → <b>Traefik :8100</b> → <b>API Gateway</b> → Supplier / Order / Delivery Service → suppliers_db / orders_db / deliveries_db · события через <b>RabbitMQ</b></div>
+</header>
+<main id="main"></main>
+<script>
+const main = document.getElementById('main');
+const now = () => performance.now();
+const hhmmss = d => d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+const esc = x => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const params = new URLSearchParams(location.search);
+const tag = params.get('rid') || ('ui-' + Math.random().toString(16).slice(2, 8));
+let seq = 0;
+
+function hl(json) {
+  return esc(json).replace(/("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(\.\d+)?)/g, m => {
+    let c = 'n'; if (/^"/.test(m)) c = /:$/.test(m) ? 'k' : 's'; else if (/true|false|null/.test(m)) c = 'b';
+    return `<span class="${c}">${m}</span>`;
+  });
+}
+function section(text, small) {
+  const h = document.createElement('div'); h.className = 'title';
+  h.innerHTML = esc(text) + (small ? `<small>${esc(small)}</small>` : ''); main.appendChild(h);
+}
+function card(html) { const c = document.createElement('div'); c.className = 'card'; c.innerHTML = html; main.appendChild(c); return c; }
+
+async function call(method, url, body, opts = {}) {
+  const rid = opts.rid || `${tag}-${++seq}`;
+  const start = now();
+  const init = { method, headers: { 'Accept': 'application/json', 'X-Request-ID': rid } };
+  if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
+  const r = await fetch(url, init);
+  const ms = Math.round(now() - start);
+  const text = await r.text();
+  let data = null, shown = text;
+  try { data = JSON.parse(text); shown = opts.compact && Array.isArray(data) ? '[\n' + data.map(x => '  ' + JSON.stringify(x)).join(',\n') + '\n]' : JSON.stringify(data, null, opts.oneLine ? 0 : 2); } catch (e) { }
+  const cls = r.status < 300 ? 'ok' : r.status < 500 ? 'c4' : 'c5';
+  if (!opts.silent) {
+    card(`<div class="req"><span class="m ${method}">${method}</span><span>${esc(url)}</span>
+      ${body !== undefined ? `<span class="meta" style="margin-left:0">${esc(JSON.stringify(body))}</span>` : ''}
+      <span class="meta">X-Request-ID: <span class="rid">${esc(r.headers.get('X-Request-ID') || rid)}</span> · → <span class="st ${cls}">${r.status}</span> · ${ms} мс${opts.type ? ` · <span class="type">${esc(opts.type)}</span>` : ''}</span></div>
+      <pre>${hl(shown)}</pre>${opts.note ? `<div class="note">${esc(opts.note)}</div>` : ''}`);
+  }
+  return { status: r.status, data, ms, rid: r.headers.get('X-Request-ID') || rid };
+}
+
+async function healthCard(caption) {
+  const h = (await call('GET', '/api/system/health', undefined, { silent: true })).data;
+  const svcs = ['api-gateway', 'supplier-service', 'order-service', 'delivery-service'];
+  card(`<div class="req"><span class="m">GET</span><span>/api/system/health</span><span class="meta">${esc(caption)} · проверено ${esc((h.checkedAt || '').slice(11, 19))} UTC</span></div>
+    <div class="grid">${svcs.map(s => {
+      const v = h[s] || {}; const rows = Object.entries(v).filter(([k]) => k !== 'status');
+      return `<div class="svc"><div class="name">${s} <span class="badge ${v.status}">${v.status}</span></div>${rows.map(([k, x]) => {
+        const val = String(x); const st = val.split(': ').pop();
+        return `<div class="row">${esc(k)}: <span class="badge ${st}">${esc(val)}</span></div>`;
+      }).join('')}</div>`;
+    }).join('')}</div>`);
+}
+
+function sseTable(orderId, rid) {
+  return new Promise(resolve => {
+    const c = card(`<div class="req"><span class="m">GET</span><span>/api/orders/${orderId}/events</span>
+      <span class="meta">text/event-stream · API Gateway → Delivery Service (WebFlux, Flux&lt;ServerSentEvent&gt;) · <span id="sst">подключение…</span></span></div>
+      <table><thead><tr><th>#</th><th>получено</th><th>+мс</th><th>статус</th><th>data</th></tr></thead><tbody id="rows"></tbody></table>`);
+    const rows = c.querySelector('#rows'); const st = c.querySelector('#sst'); const start = now(); let n = 0;
+    const es = new EventSource(`/api/orders/${orderId}/events`);
+    es.onopen = () => st.innerHTML = '<span class="st ok">200, поток открыт</span>';
+    es.addEventListener('status', e => {
+      const d = JSON.parse(e.data); n++;
+      rows.insertAdjacentHTML('beforeend', `<tr><td>${n}</td><td>${hhmmss(new Date())}</td><td>+${Math.round(now() - start)}</td>
+        <td><span class="badge ${d.status}">${d.status}</span></td><td class="wrap">${esc(JSON.stringify(d))}</td></tr>`);
+      if (d.status === 'DELIVERED') { es.close(); st.innerHTML = '<span class="st ok">DELIVERED — поток завершён</span>'; resolve(); }
+    });
+    setTimeout(() => { es.close(); resolve(); }, 40000);
+  });
+}
+
+async function flow() {
+  section('1. Состояние системы', 'GET /api/system/health — шлюз опрашивает /actuator/health каждого сервиса');
+  await healthCard('все компоненты');
+  section('2. Supplier Service: товары поставщиков', 'GET /api/suppliers/products → suppliers_db');
+  await call('GET', '/api/suppliers/products', undefined, { compact: true, type: 'List<Product>' });
+  section('3. Создание заказа', 'Order Service → (RestClient) Supplier Service: проверка и резерв → orders_db → OrderCreated → RabbitMQ');
+  const r = await call('POST', '/api/orders', { customerName: 'Иванов Иван', address: 'Москва, ул. Солнечная, 10, кв. 15', productId: 2, quantity: 3 },
+    { rid: tag, type: '201 Created', note: 'Один X-Request-ID сопровождает запрос через Gateway, Order, Supplier, RabbitMQ и Delivery — его видно в логах всех сервисов.' });
+  if (!r.data || !r.data.id) return;
+  section(`4. Пользователь получает обновления заказа #${r.data.id} через SSE`, 'Delivery Service получил OrderCreated из RabbitMQ, создал доставку и меняет статусы');
+  await sseTable(r.data.id, tag);
+  await sleep(500);
+  section('5. Итоговое состояние', 'Order Service обновил статус заказа по событиям DeliveryStatusChanged из RabbitMQ');
+  await call('GET', `/api/orders/${r.data.id}`, undefined, { oneLine: true, type: 'orders_db' });
+  await call('GET', `/api/deliveries/by-order/${r.data.id}`, undefined, { oneLine: true, type: 'deliveries_db' });
+}
+
+async function errors() {
+  section('Бизнес-ошибки и отсутствие данных', 'обрабатываются сервисами и возвращаются клиенту через шлюз');
+  await call('POST', '/api/orders', { customerName: 'Петрова Анна', address: 'Москва, пр. Вернадского, 78', productId: 4, quantity: 1 },
+    { type: 'нет остатка → 409', note: 'Supplier Service вернул остаток 0 — заказ не создан, событие не отправлено.' });
+  await call('POST', '/api/orders', { customerName: 'Петрова Анна', address: 'Москва, пр. Вернадского, 78', productId: 99, quantity: 1 }, { type: 'товара нет → 404' });
+  await call('POST', '/api/orders', { customerName: '', address: '', productId: 1, quantity: 0 }, { type: 'валидация → 400' });
+}
+
+async function outage() {
+  section('Отказ: Supplier Service остановлен (docker compose stop supplier-service)', 'timeout + retry + circuit breaker (Resilience4j) в Order Service, fallback в API Gateway');
+  await healthCard('Supplier Service недоступен');
+  for (let i = 1; i <= 4; i++) {
+    await call('POST', '/api/orders', { customerName: 'Сидоров Пётр', address: 'Москва, ул. Лесная, 5', productId: 3, quantity: 1 },
+      { oneLine: true, type: i === 1 ? 'connect timeout ×3 (retry) → fallback' : 'circuit breaker OPEN → сразу fallback',
+        note: i === 1 ? 'Первый запрос: 3 попытки GET товара с таймаутом подключения, затем fallback — ответ 503 за несколько секунд, без зависания.' :
+          i === 2 ? 'После серии ошибок circuit breaker «supplier» открыт: Order Service не обращается к недоступному сервису и отвечает 503 за миллисекунды.' : '' });
+  }
+  await call('GET', '/api/suppliers/products', undefined, { oneLine: true, type: 'fallback шлюза',
+    note: 'Прямой маршрут к Supplier Service: CircuitBreaker-фильтр API Gateway возвращает 503 вместо ошибки соединения.' });
+  await call('GET', '/api/orders', undefined, { compact: true, type: 'остальная система работает' });
+}
+
+async function recovery() {
+  section('Восстановление: docker compose start supplier-service', 'circuit breaker переходит в HALF_OPEN → CLOSED, заказы снова создаются');
+  await healthCard('после запуска Supplier Service');
+  const r = await call('POST', '/api/orders', { customerName: 'Сидоров Пётр', address: 'Москва, ул. Лесная, 5', productId: 3, quantity: 1 }, { rid: tag, type: '201 Created' });
+  await call('POST', '/api/orders', { customerName: 'Кузнецова Ольга', address: 'Москва, ул. Тверская, 7', productId: 1, quantity: 1 }, { oneLine: true, type: '201 Created' });
+  await healthCard('circuit breaker после успешных вызовов');
+}
+
+const run = { flow, errors, outage, recovery }[params.get('s') || 'flow'];
+Promise.resolve(run()).finally(() => document.body.dataset.done = '1');
+</script>
+</body>
+</html>
