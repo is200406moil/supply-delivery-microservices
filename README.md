@@ -104,6 +104,8 @@ Prometheus и Grafana поднимаются вместе с остальным�
 | Prometheus | http://localhost:9090 | `Status → Targets`: 4 сервиса, опрос раз в 5 с; `Alerts`: правила ниже |
 | Grafana | http://localhost:3000 (admin / `GRAFANA_ADMIN_PASSWORD` из `.env`) | дашборд «food-micro: обзор сервисов» подключается автоматически |
 
+![Дашборд Grafana: доступность, RPS, 5xx, p95, circuit breaker, JVM heap](docs/grafana-dashboard.jpg)
+
 Дашборд (`infra/grafana/dashboards/overview.json`): доступность сервисов (`up`), запросы в секунду,
 доля ответов 5xx, задержка p95, состояние circuit breaker Resilience4j, JVM heap.
 
