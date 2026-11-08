@@ -92,6 +92,33 @@ POST /api/orders ─► Traefik ─► API Gateway (X-Request-ID) ─► Order S
 | `GET /api/orders/{id}/events` (SSE) | Delivery (переписывается шлюзом в `/api/deliveries/orders/{id}/events`) |
 | `GET /api/system/health` | API Gateway |
 
+## Мониторинг: Prometheus и Grafana
+
+Каждый сервис отдаёт метрики Micrometer на `/actuator/prometheus` (зависимость `micrometer-registry-prometheus`,
+тег `application` = имя сервиса, гистограмма задержек `http.server.requests`).
+Prometheus и Grafana поднимаются вместе с остальными контейнерами и сидят во внутренней сети `internal`;
+наружу их порты открыты только на `127.0.0.1`.
+
+| Компонент | Адрес | Что там |
+| --- | --- | --- |
+| Prometheus | http://localhost:9090 | `Status → Targets`: 4 сервиса, опрос раз в 5 с; `Alerts`: правила ниже |
+| Grafana | http://localhost:3000 (admin / `GRAFANA_ADMIN_PASSWORD` из `.env`) | дашборд «food-micro: обзор сервисов» подключается автоматически |
+
+Дашборд (`infra/grafana/dashboards/overview.json`): доступность сервисов (`up`), запросы в секунду,
+доля ответов 5xx, задержка p95, состояние circuit breaker Resilience4j, JVM heap.
+
+Правила алертов (`infra/prometheus/alerts.yml`, Alertmanager не подключён, алерты видны в UI Prometheus):
+
+| Алерт | Условие |
+| --- | --- |
+| `ServiceDown` | сервис не отдаёт метрики 30 с |
+| `HighErrorRate` | больше 5% ответов 5xx за минуту |
+| `CircuitBreakerOpen` | circuit breaker открыт дольше 10 с |
+
+Проверка отказа: `docker compose stop supplier-service` → через ~30 с в Prometheus срабатывает `ServiceDown`,
+на дашборде supplier-service становится DOWN, а при запросах заказов растёт доля 5xx и открывается circuit breaker
+в order-service. `docker compose start supplier-service` возвращает всё обратно.
+
 ## Запуск
 
 ```

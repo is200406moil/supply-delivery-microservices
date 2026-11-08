@@ -1,0 +1,31 @@
+# Правила алертов. Alertmanager не подключён: сработавшие алерты видны
+# на странице http://localhost:${PROMETHEUS_PORT}/alerts.
+groups:
+  - name: services
+    rules:
+      - alert: ServiceDown
+        expr: up{job="services"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} не отвечает на /actuator/prometheus"
+
+      - alert: HighErrorRate
+        expr: |
+          sum by (application) (rate(http_server_requests_seconds_count{status=~"5.."}[1m]))
+            /
+          sum by (application) (rate(http_server_requests_seconds_count[1m])) > 0.05
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.application }}: больше 5% ответов 5xx за минуту"
+
+      - alert: CircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 10s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.application }}: circuit breaker {{ $labels.name }} открыт"
